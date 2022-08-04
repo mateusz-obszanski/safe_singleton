@@ -1,3 +1,9 @@
+"""
+Deprecated because metaclasses are problematic to handle and think about. It is
+easier and more straightforward to generally use __new__ and classmethods.
+"""
+
+
 from abc import ABC, ABCMeta
 from typing import (
     Any,

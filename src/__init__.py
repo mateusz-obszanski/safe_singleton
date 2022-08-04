@@ -1,2 +1,1 @@
-# TODO more exports
-from ._base import SimpleSingleton, NoImplicitReinitSingleton, ExplicitReinitSingleton
+from ._base import Singleton, WeakRefSingleton

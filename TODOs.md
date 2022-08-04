@@ -1,5 +1,10 @@
 # TODOs
 
+- [] invalidation
+  - [] getattr - attribute wrapper-getter factory that checks parent instance
+    validity,
+  - [] maybe option/decorator/class (opt-in/out?) that automatically injects
+    above behaviour into instance's fields' and (optional?) nested fields (depth?)
 - [] tests with pytest
   - [] coverage with its configuration
   - [] full coverage

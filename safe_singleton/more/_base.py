@@ -1,7 +1,9 @@
-from abc import ABC
-from typing import Any, ClassVar, TypeVar, final
+from abc import ABC, abstractmethod
+from dataclasses import InitVar, dataclass, field
+from typing import Any, ClassVar, Generic, TypeVar, cast, final
 
 from typing_extensions import Self
+from weakref import ReferenceType, ref
 
 from ._meta import SingletonMeta
 from ..exceptions import (
@@ -13,6 +15,7 @@ from ..exceptions import (
 
 
 _AbstractSingletonCls = TypeVar("_AbstractSingletonCls", bound=SingletonMeta)
+T = TypeVar("T")
 
 
 def abstract_singleton(
@@ -114,8 +117,11 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
     Adds `reinit` method that invalidates all hard references and creates a new
     instance. Invalidated objects will raise InvalidationError when used (e.g.
     their attributes will be used). This will not invalidate already copied or
-    referenced attributes of singletons, so use with caution. Each instance can
-    check, whether it is valid, by calling `is_instance_valid` method.
+    referenced attributes of singletons, so use with caution. You can somehow
+    solve this issue by wrapping the referenced attributes with `wrap_attr` or
+    `wrap_attr_weak` - those return references, that can further be extended
+    with their `forward_ref` methods. Each instance can check, whether it is
+    valid, by calling `is_instance_valid` method.
     """
 
     # ? maybe create another clas above that does not raise InvalidationError
@@ -126,15 +132,21 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
         new_instance = cls(*args, **kwds)
         return new_instance
 
-    def is_instance_valid(self) -> bool:
-        return id(self) == id(type(self).maybe_get_instance())
-
     @classmethod
     def invalidate_singleton(cls, raise_invalidation=False) -> None:
         cls._unregister_instance()
 
         if raise_invalidation:
             raise InvalidationError(cls)
+
+    def is_instance_valid(self) -> bool:
+        return id(self) == id(type(self).maybe_get_instance())
+
+    def wrap_attr(self, a: T) -> "SingletonInstanceFieldRef[Self, T]":
+        return SingletonInstanceFieldRef(self, a)
+
+    def wrap_attr_weak(self, a: T) -> "SingletonInstanceFieldRefWeak[Self, T]":
+        return SingletonInstanceFieldRefWeak(self, a)
 
     @classmethod
     def _unregister_instance(cls) -> None:
@@ -155,3 +167,96 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
             return super().__getattribute__(__name)
         else:
             raise InvalidationError(type(self))
+
+
+# ******************************************************************************
+# * Types below are private (not exported inside __init__.py)
+
+_SourceT = TypeVar("_SourceT", bound=ExplicitReinitSingleton)
+_ToForwardT = TypeVar("_ToForwardT")
+_RefT = TypeVar("_RefT", bound="AbstractSingletonInstanceFieldRef")
+
+
+class AbstractSingletonInstanceFieldRef(ABC, Generic[_SourceT, T]):
+    def __init__(self, _source: ExplicitReinitSingleton, _wrapped) -> None:
+        super().__init__()
+        self._source = _source
+        self._wrapped = _wrapped
+
+    def __call__(self) -> T:
+        if self.is_source_valid():
+            return self._get_wrapped()
+        else:
+            raise InvalidationError(type(self._maybe_get_source()))
+
+    @abstractmethod
+    def forward_ref(
+        self, x: _ToForwardT
+    ) -> "AbstractSingletonInstanceFieldRef[_SourceT, _ToForwardT]":
+        ...
+
+    def is_source_valid(self) -> bool:
+        return self._maybe_get_source() is not None
+
+    @abstractmethod
+    def _maybe_get_source(self) -> _SourceT | None:
+        ...
+
+    def _forward_ref_as(self, refcls: type[_RefT], x) -> _RefT:
+        return refcls(self._source, x)
+
+    def _get_wrapped(self) -> T:
+        return self._wrapped
+
+
+@dataclass(frozen=True)
+class SingletonInstanceFieldRef(
+    AbstractSingletonInstanceFieldRef, Generic[_SourceT, T]
+):
+    """
+    Adds invalidation on `Singleton` instance field access on shallow level.
+    You can wrap nested values by using `forward_ref` method.
+    This is NOT a weakref.ReferenceType!
+    """
+
+    _source: _SourceT
+    _wrapped: T
+
+    def forward_ref(
+        self, x: _ToForwardT
+    ) -> "SingletonInstanceFieldRef[_SourceT, _ToForwardT]":
+        return self._forward_ref_as(SingletonInstanceFieldRef, x)
+
+    def forward_ref_weak(
+        self, x: _ToForwardT
+    ) -> "SingletonInstanceFieldRefWeak[_SourceT, _ToForwardT]":
+        return self._forward_ref_as(SingletonInstanceFieldRefWeak, x)
+
+    def _maybe_get_source(self) -> _SourceT:
+        return self._source
+
+
+@dataclass(frozen=True)
+class SingletonInstanceFieldRefWeak(
+    AbstractSingletonInstanceFieldRef, Generic[_SourceT, T]
+):
+    # FIXME this is wrongly typed, in reality this type is correct only for
+    # manual initialization, but later it can be a weak reference type
+    _source: _SourceT
+    _wrapped: T
+
+    def forward_ref(
+        self, x: _ToForwardT
+    ) -> "SingletonInstanceFieldRefWeak[_SourceT, _ToForwardT]":
+        return self._forward_ref_as(SingletonInstanceFieldRefWeak, x)
+
+    def _maybe_get_source(self) -> _SourceT | None:
+        assert isinstance(self._source, ReferenceType)
+        return self._source()
+
+    def __post_init__(self) -> None:
+        if isinstance(self._source, ReferenceType):
+            return
+
+        # this dataclass is frozen, hence we must use object.__setattr__
+        object.__setattr__(self, "_source_ref", ref(self._source))

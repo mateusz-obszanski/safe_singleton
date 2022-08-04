@@ -1,5 +1,5 @@
 from abc import ABC
-from weakref import ref
+from weakref import ReferenceType, ref
 
 from typing_extensions import Self
 
@@ -13,6 +13,13 @@ from ._base import (
 
 @abstract_singleton
 class SimpleWeakRefSingleton(SimpleSingleton, ABC):
+    def as_ref(self) -> ReferenceType[Self]:
+        return ref(self)
+
+    @classmethod
+    def get_instance_as_ref(cls) -> ReferenceType[Self]:
+        return super().get_instance().as_ref()
+
     @classmethod
     def _register_new_instance(cls, i: Self) -> Self:
         cls._instance = ref(i)

@@ -1,11 +1,15 @@
-from . import more
+from .more import (
+    ExplicitReinitSingleton,
+    ExplicitReinitWeakRefSingleton,
+    abstract_singleton,
+)
 
 
-@more.abstract_singleton
-class Singleton(more.ExplicitReinitSingleton):
+@abstract_singleton
+class Singleton(ExplicitReinitSingleton):
     ...
 
 
-@more.abstract_singleton
-class WeakRefSingleton(more.ExplicitReinitWeakRefSingleton):
+@abstract_singleton
+class WeakRefSingleton(ExplicitReinitWeakRefSingleton):
     ...

@@ -1,10 +1,7 @@
 from abc import ABC
-from typing import cast
-
-from typing_extensions import Self
 from weakref import ref
 
-from src.exceptions import NoInstanceError
+from typing_extensions import Self
 
 from ._base import (
     abstract_singleton,
@@ -33,11 +30,11 @@ class NoImplicitReinitWeakRefSingleton(
     """
 
     @classmethod
-    def get_instance(cls) -> Self:
-        if cls._instance is None or (i := cls._instance()) is None:
-            raise NoInstanceError(cls)
+    def maybe_get_instance(cls) -> Self | None:
+        if (instance_ref := cls._instance) is None:
+            return None
         else:
-            return cast(Self, i)
+            return instance_ref()
 
 
 @abstract_singleton

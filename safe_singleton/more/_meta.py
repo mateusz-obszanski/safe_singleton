@@ -11,8 +11,6 @@ class MetaClassInitDict(TypedDict):
 # initialized in a custom way - this is what metaclasses are supposed to do.
 # They are "types of types" - each method within a metaclass is like
 # a classmethod in a normal one.
-
-
 class SingletonMeta(ABCMeta, type):
     def __init__(
         cls, name: str, bases: tuple[type, ...], dct: MetaClassInitDict

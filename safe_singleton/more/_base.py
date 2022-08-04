@@ -35,14 +35,18 @@ def abstract_singleton(
 class SimpleSingleton(ABC, metaclass=SingletonMeta):
     @classmethod
     def get_instance(cls) -> Self:
-        if (i := cls._instance) is None:
+        if (i := cls.maybe_get_instance()) is None:
             raise NoInstanceError(cls)
         else:
             return i
 
     @classmethod
+    def maybe_get_instance(cls) -> Self | None:
+        return cls._instance
+
+    @classmethod
     def instance_exists(cls) -> bool:
-        return cls.get_instance() is not None
+        return cls.maybe_get_instance() is not None
 
     def __new__(cls: type[Self], *_, **__) -> Self:
         # The correct error when wrong arguments (or keywords) are given will
@@ -123,10 +127,7 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
         return new_instance
 
     def is_instance_valid(self) -> bool:
-        try:
-            return id(self) == id(type(self).get_instance())
-        except NoInstanceError:
-            return False
+        return id(self) == id(type(self).maybe_get_instance())
 
     @classmethod
     def invalidate_singleton(cls, raise_invalidation=False) -> None:

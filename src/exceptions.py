@@ -21,6 +21,14 @@ class SingletonError(Exception, ABC):
 
 
 @final
+class AbstractSingletonInitError(SingletonError, TypeError):
+    """
+    Raised, when one of abstract Singleton classes are being initialized without
+    subclassing.
+    """
+
+
+@final
 class ReinitError(SingletonError):
     """
     Raised on implicit reinitialization of instance

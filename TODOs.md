@@ -1,5 +1,8 @@
 # TODOs
 
+- [] AbstractSingletonInstanceFieldRef - do not use dataclasses for the children,
+  simplify the relationships, fix type issues,
+  - [] should `__call__` and `unwrap` be both present?
 - [] invalidation
   - [] getattr - attribute wrapper-getter factory that checks parent instance
     validity,

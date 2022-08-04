@@ -182,12 +182,14 @@ class AbstractSingletonInstanceFieldRef(ABC, Generic[_SourceT, T]):
         super().__init__()
         self._source = _source
         self._wrapped = _wrapped
+        self._source_t = type(_source)
 
     def __call__(self) -> T:
-        if self.is_source_valid():
-            return self._get_wrapped()
-        else:
-            raise InvalidationError(type(self._maybe_get_source()))
+        return self.unwrap()
+
+    def unwrap(self) -> T:
+        self._guarantee_source_validity()
+        return self._wrapped
 
     @abstractmethod
     def forward_ref(
@@ -203,10 +205,16 @@ class AbstractSingletonInstanceFieldRef(ABC, Generic[_SourceT, T]):
         ...
 
     def _forward_ref_as(self, refcls: type[_RefT], x) -> _RefT:
+        self._guarantee_source_validity()
         return refcls(self._source, x)
 
-    def _get_wrapped(self) -> T:
-        return self._wrapped
+    def _guarantee_source_validity(self) -> None:
+        """
+        Raises InvalidationError if the instance is not valid anymore.
+        """
+
+        if not self.is_source_valid():
+            raise InvalidationError(self._source_t)
 
 
 @dataclass(frozen=True)
@@ -221,6 +229,7 @@ class SingletonInstanceFieldRef(
 
     _source: _SourceT
     _wrapped: T
+    _source_t: type[_SourceT] = field(init=False)
 
     def forward_ref(
         self, x: _ToForwardT
@@ -235,6 +244,9 @@ class SingletonInstanceFieldRef(
     def _maybe_get_source(self) -> _SourceT:
         return self._source
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_source_t", type(self._source))
+
 
 @dataclass(frozen=True)
 class SingletonInstanceFieldRefWeak(
@@ -244,6 +256,8 @@ class SingletonInstanceFieldRefWeak(
     # manual initialization, but later it can be a weak reference type
     _source: _SourceT
     _wrapped: T
+
+    _source_t: type[_SourceT] = field(init=False)
 
     def forward_ref(
         self, x: _ToForwardT
@@ -255,8 +269,22 @@ class SingletonInstanceFieldRefWeak(
         return self._source()
 
     def __post_init__(self) -> None:
-        if isinstance(self._source, ReferenceType):
-            return
-
         # this dataclass is frozen, hence we must use object.__setattr__
-        object.__setattr__(self, "_source_ref", ref(self._source))
+        self_setattr = lambda name, val: object.__setattr__(self, name, val)
+        set_source_t = lambda source: self_setattr("_source_t", type(source))
+
+        instance_or_ref = self._source
+
+        if isinstance(instance_or_ref, ReferenceType):
+            instance = instance_or_ref()
+            if instance is None:
+                raise InvalidationError(
+                    type(None), "could not even initialize the weak reference"
+                )
+            else:
+                # only set _source_t
+                set_source_t(instance)
+        else:
+            instance = self._source
+            self_setattr("_source_ref", ref(instance))
+            set_source_t(instance)

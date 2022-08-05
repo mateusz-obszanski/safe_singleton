@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from dataclasses import InitVar, dataclass, field
-from typing import Any, ClassVar, Generic, TypeVar, cast, final
+from dataclasses import dataclass, field
+from functools import wraps
+from typing import Any, ClassVar, Generic, TypeVar, final
 
 from typing_extensions import Self
 from weakref import ReferenceType, ref
@@ -8,6 +9,7 @@ from weakref import ReferenceType, ref
 from ._meta import SingletonMeta
 from ..exceptions import (
     AbstractSingletonInitError,
+    CriticalUnregisterError,
     InvalidationError,
     NoInstanceError,
     ReinitError,
@@ -50,6 +52,9 @@ class SimpleSingleton(ABC, metaclass=SingletonMeta):
     @classmethod
     def instance_exists(cls) -> bool:
         return cls.maybe_get_instance() is not None
+
+    def __copy__(self) -> Self:
+        return self
 
     def __new__(cls: type[Self], *_, **__) -> Self:
         # The correct error when wrong arguments (or keywords) are given will
@@ -98,19 +103,6 @@ class NoImplicitReinitSingleton(SimpleSingleton, ABC):
             return super().__new__(cls, *args, **kwds)
 
 
-_ExpIniSingClsT = TypeVar("_ExpIniSingClsT", bound=type["ExplicitReinitSingleton"])
-
-
-def disable_invalidation_error(cls: _ExpIniSingClsT) -> _ExpIniSingClsT:
-    """
-    Disables raising InvalidationError, instance validity can still be checked
-    with a method.
-    """
-
-    cls.__singleton_no_raise_invalidation__ = True
-    return cls
-
-
 @abstract_singleton
 class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
     """
@@ -125,6 +117,8 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
     """
 
     # ? maybe create another clas above that does not raise InvalidationError
+
+    __singleton_no_raise_invalidation__: ClassVar[bool] = False
 
     @classmethod
     def reinit(cls, *args, **kwds) -> Self:
@@ -157,8 +151,6 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
 
         cls._instance = None
 
-    __singleton_no_raise_invalidation__: ClassVar[bool] = False
-
     def __getattribute__(self, __name: str) -> Any:
         # avoids RecursionError
         if __name == "is_instance_valid":
@@ -167,6 +159,91 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
             return super().__getattribute__(__name)
         else:
             raise InvalidationError(type(self))
+
+
+_ExpIniSingClsT = TypeVar("_ExpIniSingClsT", bound=type[ExplicitReinitSingleton])
+
+
+def no_invalidation_error(cls: _ExpIniSingClsT) -> _ExpIniSingClsT:
+    """
+    Disables raising InvalidationError, instance validity can still be checked
+    with a method.
+    """
+
+    cls.__singleton_no_raise_invalidation__ = True
+    return cls
+
+
+@abstract_singleton
+class EnsureInitSingleton(ExplicitReinitSingleton, ABC):
+    """
+    Ensures that its `__init__` method has been called no matter what - it can
+    be disabled with `no_ensure_init` decorator. Use, when other packages e.g.
+    those with dataclass-ish behaviour mess up Your objects.
+    """
+
+    __singleton_ensure_init__: ClassVar[bool] = True
+    __singleton_initialized__: ClassVar[bool] = False
+    __singleton_is_init_wrapped__: ClassVar[bool] = False
+
+    def __new__(cls: type[Self], *args, **kwds) -> Self:
+        instance = super().__new__(*args, **kwds)
+
+        if not cls.__singleton_is_init_wrapped__ and cls.__singleton_ensure_init__:
+            cls._wrap_init()
+
+        return instance
+
+    @classmethod
+    def _wrap_init(cls) -> None:
+        super_init = super().__init__
+        child_init = cls.__init__
+
+        @wraps(cls.__init__)
+        def __init__(self, *args, **kwds) -> None:
+            cls = type(self)
+
+            try:
+                if not cls.__singleton_initialized__:
+                    super_init(self, *args, **kwds)
+                child_init(self, *args, **kwds)
+            except Exception as e_init:
+                try:
+                    cls._unregister_instance()
+                except Exception as e_unregister:
+                    cls._critical_unregister_attempt(e_init, e_unregister)
+                    raise e_unregister from e_init
+
+            type(self).__singleton_initialized__ = True
+
+        cls.__init__ = __init__
+
+    @classmethod
+    def _unregister_instance(cls) -> None:
+        super()._unregister_instance()
+        cls.__singleton_initialized__ = False
+
+    @classmethod
+    def _critical_unregister_attempt(cls, e_init: Exception, e_unregister: Exception):
+        cls_setattr = lambda name, value: object.__setattr__(cls, name, value)
+
+        try:
+            cls_setattr("_instance", None)
+            cls_setattr("__singleton_initialized__", False)
+        except Exception:
+            # TODO raise exception group, when they will be introduced to Python
+            # add e_init then
+            raise CriticalUnregisterError(
+                cls, errors=(e_init, e_unregister)
+            ) from e_unregister
+
+
+_EnsIniSingT = TypeVar("_EnsIniSingT", bound=type[EnsureInitSingleton])
+
+
+def no_ensure_init(cls: _EnsIniSingT) -> _EnsIniSingT:
+    cls.__singleton_ensure_init__ = False
+    return cls
 
 
 # ******************************************************************************
@@ -185,9 +262,10 @@ class AbstractSingletonInstanceFieldRef(ABC, Generic[_SourceT, T]):
         self._source_t = type(_source)
 
     def __call__(self) -> T:
-        return self.unwrap()
+        """
+        Unwraps `self` and returns underlying singleton's attribute.
+        """
 
-    def unwrap(self) -> T:
         self._guarantee_source_validity()
         return self._wrapped
 
@@ -231,6 +309,9 @@ class SingletonInstanceFieldRef(
     _wrapped: T
     _source_t: type[_SourceT] = field(init=False)
 
+    def as_weak(self) -> "SingletonInstanceFieldRefWeak[_SourceT, T]":
+        return SingletonInstanceFieldRefWeak(self._source, self._wrapped)
+
     def forward_ref(
         self, x: _ToForwardT
     ) -> "SingletonInstanceFieldRef[_SourceT, _ToForwardT]":
@@ -258,6 +339,9 @@ class SingletonInstanceFieldRefWeak(
     _wrapped: T
 
     _source_t: type[_SourceT] = field(init=False)
+
+    def as_strong(self) -> SingletonInstanceFieldRef[_SourceT, T]:
+        return SingletonInstanceFieldRef(self._source(), self._wrapped)
 
     def forward_ref(
         self, x: _ToForwardT

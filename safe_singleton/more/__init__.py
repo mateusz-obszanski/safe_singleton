@@ -8,10 +8,12 @@ from ._base import (
     SimpleSingleton,
     NoImplicitReinitSingleton,
     ExplicitReinitSingleton,
+    EnsureInitSingleton,
     abstract_singleton,
 )
 from ._weakref_singletons import (
     SimpleWeakRefSingleton,
     NoImplicitReinitWeakRefSingleton,
     ExplicitReinitWeakRefSingleton,
+    EnsureInitWeakRefSingleton,
 )

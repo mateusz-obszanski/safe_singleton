@@ -8,11 +8,16 @@ from ._base import (
     SimpleSingleton,
     NoImplicitReinitSingleton,
     ExplicitReinitSingleton,
+    EnsureInitSingleton,
 )
 
 
 @abstract_singleton
 class SimpleWeakRefSingleton(SimpleSingleton, ABC):
+    """
+    See `SimpleSingleton`.
+    """
+
     def as_ref(self) -> ReferenceType[Self]:
         return ref(self)
 
@@ -48,4 +53,13 @@ class NoImplicitReinitWeakRefSingleton(
 class ExplicitReinitWeakRefSingleton(
     NoImplicitReinitWeakRefSingleton, ExplicitReinitSingleton, ABC
 ):
-    ...
+    """
+    See `ExplicitReinitWeakRefSingleton`.
+    """
+
+
+@abstract_singleton
+class EnsureInitWeakRefSingleton(EnsureInitSingleton):
+    """
+    See `EnsureInitWeakRefSingleton`.
+    """

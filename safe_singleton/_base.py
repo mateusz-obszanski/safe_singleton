@@ -7,9 +7,11 @@ from .more import (
 
 @abstract_singleton
 class Singleton(ExplicitReinitSingleton):
+    # TODO documentation
     ...
 
 
 @abstract_singleton
 class WeakRefSingleton(ExplicitReinitWeakRefSingleton):
+    # TODO documentation
     ...

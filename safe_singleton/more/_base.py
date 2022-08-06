@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Generic, TypeVar, final
 from typing_extensions import Self
 from weakref import ReferenceType, ref
 
+from ._decorators import abstract_singleton
 from ._meta import SingletonMeta
 from ..exceptions import (
     AbstractSingletonInitError,
@@ -16,24 +17,7 @@ from ..exceptions import (
 )
 
 
-_AbstractSingletonCls = TypeVar("_AbstractSingletonCls", bound=SingletonMeta)
 T = TypeVar("T")
-
-
-def abstract_singleton(
-    __cls: _AbstractSingletonCls,
-) -> _AbstractSingletonCls:
-    """
-    Injects necessary methods into abstract singleton.
-    """
-
-    @classmethod
-    def _is_abstract_singleton(cls) -> bool:
-        return cls is __cls
-
-    __cls._is_abstract_singleton = _is_abstract_singleton  # type: ignore
-
-    return __cls
 
 
 @abstract_singleton
@@ -161,19 +145,6 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
             raise InvalidationError(type(self))
 
 
-_ExpIniSingClsT = TypeVar("_ExpIniSingClsT", bound=type[ExplicitReinitSingleton])
-
-
-def no_invalidation_error(cls: _ExpIniSingClsT) -> _ExpIniSingClsT:
-    """
-    Disables raising InvalidationError, instance validity can still be checked
-    with a method.
-    """
-
-    cls.__singleton_no_raise_invalidation__ = True
-    return cls
-
-
 @abstract_singleton
 class EnsureInitSingleton(ExplicitReinitSingleton, ABC):
     """
@@ -236,14 +207,6 @@ class EnsureInitSingleton(ExplicitReinitSingleton, ABC):
             raise CriticalUnregisterError(
                 cls, errors=(e_init, e_unregister)
             ) from e_unregister
-
-
-_EnsIniSingT = TypeVar("_EnsIniSingT", bound=type[EnsureInitSingleton])
-
-
-def no_ensure_init(cls: _EnsIniSingT) -> _EnsIniSingT:
-    cls.__singleton_ensure_init__ = False
-    return cls
 
 
 # ******************************************************************************

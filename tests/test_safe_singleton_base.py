@@ -4,7 +4,7 @@ from typing import TypeVar
 import pytest
 
 from safe_singleton import Singleton, WeakRefSingleton
-from safe_singleton.exceptions import AbstractSingletonInitError, ReinitError
+from safe_singleton.exceptions import AbstractSingletonInitError, ImplicitReinitError
 
 
 _SingT = TypeVar("_SingT", bound=type[Singleton])
@@ -42,7 +42,7 @@ def test_raises_on_implicit_reinit(cls: SingletonCls):
     subcls = subcls_factory(cls)
     first = subcls()
 
-    with pytest.raises(ReinitError):
+    with pytest.raises(ImplicitReinitError):
         second = subcls()
         del second
 

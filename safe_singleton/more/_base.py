@@ -1,27 +1,40 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import wraps
-from typing import Any, ClassVar, Generic, TypeVar, final
-
-from typing_extensions import Self
+from typing import Any, ClassVar, Generic, TypeGuard, TypeVar, final
 from weakref import ReferenceType, ref
 
-from ._decorators import abstract_singleton
-from ._meta import SingletonMeta
+from typing_extensions import Self
+
 from ..exceptions import (
     AbstractSingletonInitError,
     CriticalUnregisterError,
+    ImplicitReinitError,
     InvalidationError,
+    NoAttrError,
     NoInstanceError,
-    ReinitError,
 )
+from ._meta import SingletonMeta, abstract_singleton
+from ..utils import raise_if
+from ..utils.context import at_exit, set_del_attr
+from ..utils.decorators import ensure_subcls_on_arg
+from ..utils.functional import call_chain
 
 
 T = TypeVar("T")
+ClsFlag = ClassVar[bool]
 
 
 @abstract_singleton
 class SimpleSingleton(ABC, metaclass=SingletonMeta):
+    """
+    The most basic singleton type
+    """
+
+    # `classmethod`s are here and not in a metaclass, because `Self` would be
+    # unavailable there.
+
     @classmethod
     def get_instance(cls) -> Self:
         if (i := cls.maybe_get_instance()) is None:
@@ -40,10 +53,9 @@ class SimpleSingleton(ABC, metaclass=SingletonMeta):
     def __copy__(self) -> Self:
         return self
 
-    def __new__(cls: type[Self], *_, **__) -> Self:
+    def __new__(cls, *args, **kwds) -> Self:
         # The correct error when wrong arguments (or keywords) are given will
-        # still be thrown, even if we do not care about them in __new__ method
-        del _, __
+        # still be thrown, even if we do not care about them in __new__ method.
 
         # vvv can be found in `SingletonMeta` - it is declared there, but the
         # implementation is injected by `abstract_singleton` decorator.
@@ -53,25 +65,26 @@ class SimpleSingleton(ABC, metaclass=SingletonMeta):
         if cls.instance_exists():
             return cls._instance
         else:
-            return cls._create_and_register_new_instance()
+            return cls._create_and_register_new_instance(args, kwds)
 
     @classmethod
-    def _create_and_register_new_instance(cls) -> Self:
+    def _create_and_register_new_instance(cls, args: tuple, kwds: dict) -> Self:
         # This has to be done this way, because otherwise weakref singletons
         # will lose the only one hard reference to the instance during
-        # it very initialization
-        new_instance = cls._create_new_instance()
+        # it very initialization.
+        new_instance = cls._create_new_instance(args, kwds)
         return cls._register_new_instance(new_instance)
 
     @final
     @classmethod
-    def _create_new_instance(cls) -> Self:
+    def _create_new_instance(cls, args: tuple, kwds: dict) -> Self:
+        del args, kwds
         return super().__new__(cls)
 
     @classmethod
-    def _register_new_instance(cls, i: Self) -> Self:
-        cls._instance = i
-        return i
+    def _register_new_instance(cls, new_instance: Self) -> Self:
+        cls._instance = new_instance
+        return new_instance
 
 
 @abstract_singleton
@@ -80,9 +93,9 @@ class NoImplicitReinitSingleton(SimpleSingleton, ABC):
     Raises `ReinitError` on second initialization attempt.
     """
 
-    def __new__(cls: type[Self], *args, **kwds) -> Self:
+    def __new__(cls, *args, **kwds) -> Self:
         if cls.instance_exists():
-            raise ReinitError(cls)
+            raise ImplicitReinitError(cls)
         else:
             return super().__new__(cls, *args, **kwds)
 
@@ -102,7 +115,7 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
 
     # ? maybe create another clas above that does not raise InvalidationError
 
-    __singleton_no_raise_invalidation__: ClassVar[bool] = False
+    __singleton_no_raise_invalidation__: ClsFlag = False
 
     @classmethod
     def reinit(cls, *args, **kwds) -> Self:
@@ -136,13 +149,15 @@ class ExplicitReinitSingleton(NoImplicitReinitSingleton, ABC):
         cls._instance = None
 
     def __getattribute__(self, __name: str) -> Any:
+        cls = type(self)
+
         # avoids RecursionError
-        if __name == "is_instance_valid":
+        if __name == cls.is_instance_valid.__name__:
             return object.__getattribute__(self, __name)
-        elif type(self).__singleton_no_raise_invalidation__ or self.is_instance_valid():
+        elif cls.__singleton_no_raise_invalidation__ or self.is_instance_valid():
             return super().__getattribute__(__name)
         else:
-            raise InvalidationError(type(self))
+            raise InvalidationError(cls)
 
 
 @abstract_singleton
@@ -153,11 +168,11 @@ class EnsureInitSingleton(ExplicitReinitSingleton, ABC):
     those with dataclass-ish behaviour mess up Your objects.
     """
 
-    __singleton_ensure_init__: ClassVar[bool] = True
-    __singleton_initialized__: ClassVar[bool] = False
-    __singleton_is_init_wrapped__: ClassVar[bool] = False
+    __singleton_ensure_init__: ClsFlag = True
+    __singleton_initialized__: ClsFlag = False
+    __singleton_is_init_wrapped__: ClsFlag = False
 
-    def __new__(cls: type[Self], *args, **kwds) -> Self:
+    def __new__(cls, *args, **kwds) -> Self:
         instance = super().__new__(*args, **kwds)
 
         if not cls.__singleton_is_init_wrapped__ and cls.__singleton_ensure_init__:
@@ -167,13 +182,11 @@ class EnsureInitSingleton(ExplicitReinitSingleton, ABC):
 
     @classmethod
     def _wrap_init(cls) -> None:
-        super_init = super().__init__
+        super_init = cls.__base__.__init__
         child_init = cls.__init__
 
         @wraps(cls.__init__)
-        def __init__(self, *args, **kwds) -> None:
-            cls = type(self)
-
+        def __init__(self: Self, *args, **kwds) -> None:
             try:
                 if not cls.__singleton_initialized__:
                     super_init(self, *args, **kwds)
@@ -196,17 +209,55 @@ class EnsureInitSingleton(ExplicitReinitSingleton, ABC):
 
     @classmethod
     def _critical_unregister_attempt(cls, e_init: Exception, e_unregister: Exception):
-        cls_setattr = lambda name, value: object.__setattr__(cls, name, value)
+        ensure_hasattr: Callable[[str], None]
+        ensure_hasattr = lambda name: raise_if(
+            not hasattr(cls, name),
+            NoAttrError(cls, name),
+        )
+
+        cls_setattr: Callable[[str, Any], None]
+        cls_setattr = lambda name, value: call_chain(
+            lambda: ensure_hasattr(name), lambda: setattr(cls, name, value)
+        )()
 
         try:
             cls_setattr("_instance", None)
             cls_setattr("__singleton_initialized__", False)
-        except Exception:
+        except Exception as e:
             # TODO raise exception group, when they will be introduced to Python
             # add e_init then
-            raise CriticalUnregisterError(
-                cls, errors=(e_init, e_unregister)
-            ) from e_unregister
+            raise CriticalUnregisterError(cls, errors=(e_init, e_unregister)) from e
+
+
+# ******************************************************************************
+# * Decorators
+# ******************************************************************************
+
+_EnsIniSingT = TypeVar("_EnsIniSingT", bound=type[EnsureInitSingleton])
+_ExpIniSingClsT = TypeVar("_ExpIniSingClsT", bound=type[ExplicitReinitSingleton])
+
+
+@ensure_subcls_on_arg(ExplicitReinitSingleton)
+def no_invalidation_error(cls: _ExpIniSingClsT) -> _ExpIniSingClsT:
+    """
+    Disables raising InvalidationError, instance validity can still be checked
+    with a method.
+    """
+
+    cls.__singleton_no_raise_invalidation__ = True
+    return cls
+
+
+@ensure_subcls_on_arg(EnsureInitSingleton)
+def no_ensure_init(cls: _EnsIniSingT) -> _EnsIniSingT:
+    """
+    Disables automatic `EnsureInitSingleton`'s or its subclass' `__init__`
+    invocation (it is called even if there is no `super` call inside subclass'
+    `__init__`).
+    """
+
+    cls.__singleton_ensure_init__ = False
+    return cls
 
 
 # ******************************************************************************
@@ -229,7 +280,7 @@ class AbstractSingletonInstanceFieldRef(ABC, Generic[_SourceT, T]):
         Unwraps `self` and returns underlying singleton's attribute.
         """
 
-        self._guarantee_source_validity()
+        self._ensure_source_valid()
         return self._wrapped
 
     @abstractmethod
@@ -238,26 +289,39 @@ class AbstractSingletonInstanceFieldRef(ABC, Generic[_SourceT, T]):
     ) -> "AbstractSingletonInstanceFieldRef[_SourceT, _ToForwardT]":
         ...
 
-    def is_source_valid(self) -> bool:
+    def is_source_valid(self, _: _SourceT | None = None) -> TypeGuard[_SourceT]:
         return self._maybe_get_source() is not None
+
+    def __copy__(self) -> Self:
+        return type(self)(self._get_source(), self._wrapped)
 
     @abstractmethod
     def _maybe_get_source(self) -> _SourceT | None:
         ...
 
-    def _forward_ref_as(self, refcls: type[_RefT], x) -> _RefT:
-        self._guarantee_source_validity()
-        return refcls(self._source, x)
+    def _get_source(self) -> _SourceT:
+        if (source := self._maybe_get_source()) is None:
+            raise InvalidationError(self._source_t)
+        else:
+            return source
 
-    def _guarantee_source_validity(self) -> None:
+    def _forward_ref_as(self, refcls: type[_RefT], x) -> _RefT:
+        return refcls(self._get_source(), x)
+
+    def _ensure_source_valid(
+        self, source: _SourceT | None = None
+    ) -> TypeGuard[_SourceT]:
         """
         Raises InvalidationError if the instance is not valid anymore.
         """
 
-        if not self.is_source_valid():
+        if not self.is_source_valid(source):
             raise InvalidationError(self._source_t)
 
+        return True
 
+
+@final
 @dataclass(frozen=True)
 class SingletonInstanceFieldRef(
     AbstractSingletonInstanceFieldRef, Generic[_SourceT, T]
@@ -268,6 +332,7 @@ class SingletonInstanceFieldRef(
     This is NOT a weakref.ReferenceType!
     """
 
+    # This attribute exists only at init and during forwarding the reference
     _source: _SourceT
     _wrapped: T
     _source_t: type[_SourceT] = field(init=False)
@@ -292,46 +357,40 @@ class SingletonInstanceFieldRef(
         object.__setattr__(self, "_source_t", type(self._source))
 
 
+@final
 @dataclass(frozen=True)
 class SingletonInstanceFieldRefWeak(
     AbstractSingletonInstanceFieldRef, Generic[_SourceT, T]
 ):
-    # FIXME this is wrongly typed, in reality this type is correct only for
-    # manual initialization, but later it can be a weak reference type
     _source: _SourceT
     _wrapped: T
+    _source_ref: ReferenceType[_SourceT] = field(init=False)
 
     _source_t: type[_SourceT] = field(init=False)
 
     def as_strong(self) -> SingletonInstanceFieldRef[_SourceT, T]:
-        return SingletonInstanceFieldRef(self._source(), self._wrapped)
+        return SingletonInstanceFieldRef(self._get_source(), self._wrapped)
 
     def forward_ref(
         self, x: _ToForwardT
     ) -> "SingletonInstanceFieldRefWeak[_SourceT, _ToForwardT]":
+        # we temporarily set a hard reference to the source, if possible
         return self._forward_ref_as(SingletonInstanceFieldRefWeak, x)
 
     def _maybe_get_source(self) -> _SourceT | None:
-        assert isinstance(self._source, ReferenceType)
+        assert isinstance(self._source_ref, ReferenceType)
         return self._source()
 
     def __post_init__(self) -> None:
+        instance = self._source
+        cls = type(instance)
+
         # this dataclass is frozen, hence we must use object.__setattr__
+        self_delattr = lambda name: object.__delattr__(self, name)
         self_setattr = lambda name, val: object.__setattr__(self, name, val)
-        set_source_t = lambda source: self_setattr("_source_t", type(source))
+        set_source_t = lambda: self_setattr("_source_t", cls)
 
-        instance_or_ref = self._source
-
-        if isinstance(instance_or_ref, ReferenceType):
-            instance = instance_or_ref()
-            if instance is None:
-                raise InvalidationError(
-                    type(None), "could not even initialize the weak reference"
-                )
-            else:
-                # only set _source_t
-                set_source_t(instance)
-        else:
-            instance = self._source
+        # deleting the hard reference to the source
+        with at_exit(lambda: self_delattr("_source")):
             self_setattr("_source_ref", ref(instance))
-            set_source_t(instance)
+            set_source_t()

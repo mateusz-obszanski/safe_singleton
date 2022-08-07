@@ -10,8 +10,7 @@ from ._base import (
     EnsureInitSingleton,
     abstract_singleton,
 )
-from ._decorators import abstract_singleton
-from ._meta import SingletonMeta
+from ._meta import SingletonMeta, abstract_singleton
 from ._weakref_singletons import (
     SimpleWeakRefSingleton,
     NoImplicitReinitWeakRefSingleton,

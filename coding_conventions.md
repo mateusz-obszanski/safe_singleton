@@ -10,4 +10,6 @@
 - `tests` directory must be at the same level as a package's directory for
   it to be tested as if it would be imported in a real project,
 - `tests` directory must have the same structure as the project. `_base.py`
-  files' equivalents must be named `test_<parent-dir>_base.py`.
+  files' equivalents must be named `test_<parent-dir>_base.py`,
+- callable classes that have no state, are not supposed to store any data and
+  are classes only to subclass `Generic` must be named in lower_snake_case.

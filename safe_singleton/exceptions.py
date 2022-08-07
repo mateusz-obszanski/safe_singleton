@@ -1,23 +1,24 @@
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import final
 
-from .utils import clsname
+# vvv for export
+from .utils.exceptions import NotClsError, NotSubclsError, PrettyError
 
 
 @dataclass
-class SingletonError(Exception, ABC):
+class SingletonError(PrettyError, ABC):
     """
     Abstract `Singleton` error
     """
 
     cls: type
-    msg: str = ""
+    msg: str = field(init=False)
+    reason: str = field(init=False, default="")
 
-    def __str__(self) -> str:
-        msg = self.msg
-        suffix = f":{msg}" if msg else ""
-        return f"{clsname(self)}{suffix}"
+    def __post_init__(self) -> None:
+        suffix = f" ({self.reason})" if self.reason else ""
+        self.msg = f"{self.cls.__name__}{suffix}"
 
 
 @final
@@ -28,16 +29,23 @@ class AbstractSingletonInitError(SingletonError, TypeError):
     """
 
 
+# TypeError - like for abstract base classes that do not override abstract
+# methods before initialization
 @final
-class ReinitError(SingletonError):
+class AbstractIsAbstractSingletonMethodNotImplementedError(
+    SingletonError, NotImplementedError, TypeError
+):
+    """
+    Raised, when `_is_abstract_singleton` abstract classmethod has not been
+    overriden before call.
+    """
+
+
+@final
+class ImplicitReinitError(SingletonError):
     """
     Raised on implicit reinitialization of instance
     """
-
-    def __post_init__(self) -> None:
-        self.msg = (
-            f"attempted to implicitly reinitialize singleton `{self.cls.__name__}`"
-        )
 
 
 @final
@@ -52,6 +60,16 @@ class InvalidationError(SingletonError):
     """
     Raised when singleton has been reinitialized anywhere in the code.
     """
+
+
+@final
+class NoAttrError(SingletonError, AttributeError):
+    attr_name: str
+
+    def __post_init__(self) -> None:
+        assert self.attr_name
+        self.reason = self.attr_name
+        return super().__post_init__()
 
 
 @final
@@ -73,6 +91,6 @@ class CriticalUnregisterError(SingletonError):
 
     errors: tuple[Exception, ...] = ()
 
-    def __str__(self) -> str:
-        prefix = super().__str__()
-        return f"{prefix} Exception was caoused by following errors: {self.errors}."
+    def __post_init__(self) -> None:
+        self.reason = f"caused by following errors: {self.errors}"
+        super().__post_init__()

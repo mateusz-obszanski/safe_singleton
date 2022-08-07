@@ -7,21 +7,22 @@ from safe_singleton import Singleton, WeakRefSingleton
 from safe_singleton.exceptions import AbstractSingletonInitError, ImplicitReinitError
 
 
-_SingT = TypeVar("_SingT", bound=type[Singleton])
+_SingClsT = TypeVar("_SingClsT", bound=type[Singleton])
+_SingT = TypeVar("_SingT", bound=Singleton)
 SingletonCls = type[Singleton]
 
 
 for_both = pytest.mark.parametrize("cls", [Singleton, WeakRefSingleton])
 
 
-def subcls_factory(base: _SingT) -> _SingT:
+def subcls_factory(base: _SingClsT) -> _SingClsT:
     class ChildSingleton(base):  # type: ignore
         ...
 
     return ChildSingleton
 
 
-def create_subcls_instance(cls: _SingT) -> _SingT:
+def create_subcls_instance(cls: type[_SingT]) -> _SingT:
     subcls = subcls_factory(cls)
     return subcls()
 
@@ -47,6 +48,20 @@ def test_raises_on_implicit_reinit(cls: SingletonCls):
         del second
 
     del first
+
+
+@for_both
+def test_get_instance(cls: SingletonCls):
+    instance = create_subcls_instance(cls)
+    assert instance is type(instance).get_instance()
+
+
+@for_both
+def test_explicit_reinit(cls: SingletonCls):
+    subcls = subcls_factory(cls)
+    first = subcls()
+    assert (second := subcls.reinit()) is not None
+    assert first is not second
 
 
 # TODO more tests for both

@@ -1,6 +1,7 @@
 from abc import ABC, ABCMeta
 from dataclasses import dataclass, field
 from functools import wraps
+from itertools import dropwhile
 from typing import TypeGuard, cast, final
 from typing_extensions import Self
 
@@ -40,16 +41,25 @@ class PureAbcMeta(ABCMeta, type):
     def __init__(cls, *_, **__) -> None:
         del _, __
 
-        original_new = cls.__new__
+        original_init = cls.__init__
 
-        @wraps(original_new)
-        def __new__(cls, *args, **kwds):
-            if cls.is_pure_abc():
-                raise PureAbcInitError(cls)
+        # Wrapping __new__ does not work, because calling object.__new__ directly
+        # is not permitted
 
-            return original_new(cls, *args, **kwds)
+        @wraps(original_init)
+        def __init__(self, *args, **kwds):
+            _cls = type(self)
 
-        setattr(cls, cls.__new__.__name__, __new__)
+            if is_pure_abc(_cls):
+                raise PureAbcInitError(cast(type[ABC], _cls))
+            else:
+                if original_init is object.__init__:
+                    args = ()
+                    kwds = {}
+
+                return original_init(self, *args, **kwds)
+
+        setattr(cls, cls.__init__.__name__, __init__)
 
 
 @dataclass(frozen=True)

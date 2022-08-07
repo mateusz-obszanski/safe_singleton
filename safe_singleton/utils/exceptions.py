@@ -2,11 +2,12 @@ from abc import ABC
 from dataclasses import InitVar, dataclass, field
 from typing import Any
 
-from ._base import clsname
+from .exception_utils import pretty_error
+from .pure_abc import PureAbcException
 
 
 @dataclass
-class PrettyError(Exception, ABC):
+class PrettyError(PureAbcException, ABC):
     """
     Provides uniform string conversion of its subclasses.
     """
@@ -17,9 +18,7 @@ class PrettyError(Exception, ABC):
     msg: str
 
     def __str__(self) -> str:
-        msg = self.msg
-        suffix = f":{msg}" if msg else ""
-        return f"{clsname(self)}{suffix}"
+        return pretty_error(self)
 
 
 @dataclass

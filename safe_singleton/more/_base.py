@@ -53,6 +53,9 @@ class SimpleSingleton(ABC, metaclass=SingletonMeta):
     def __copy__(self) -> Self:
         return self
 
+    def __deepcopy__(self) -> Self:
+        return self
+
     def __new__(cls, *args, **kwds) -> Self:
         # The correct error when wrong arguments (or keywords) are given will
         # still be thrown, even if we do not care about them in __new__ method.

@@ -63,6 +63,7 @@ class InvalidationError(SingletonError):
 
 
 @final
+@dataclass
 class NoAttrError(SingletonError, AttributeError):
     attr_name: str
 
